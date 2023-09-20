@@ -1,0 +1,124 @@
+```{r}
+
+rm(list = ls())
+
+
+##carga paquetes
+
+PAQUETES <- c("dplyr","tidyverse","ggplot2","here")
+
+
+for (el in PAQUETES){
+  if (!require(el, character.only = TRUE)) {
+    install.packages(el, repos = "https://cloud.r-project.org")
+    require(el, character.only = TRUE)
+  }
+}
+
+
+rm(PAQUETES, el)
+
+path<-here()
+setwd(path)
+
+project_path<-substr(path,0,tail(unlist(str_locate_all(path,"/")),2))
+
+```
+
+
+clasification in goods, services and energy
+```{r}
+
+gastos<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFgastos_2021.RDS"))
+hogares<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFhogar_2021.RDS"))
+
+
+gastos<-gastos %>%
+  complete(CODIGO,NUMERO) %>%
+  mutate(cod_categoria=as.numeric(substr(CODIGO,1,2))) %>%
+  mutate(categoria=case_when(
+    cod_categoria %in% c(1,2) ~ alimentos,
+    CODIGO %in% paste0(0,as.character(seq(4111,4122))), ~ "servicios",
+    CODIGO %in% paste0(0,as.character(seq(4310,4399))), ~ "servicios",
+    CODIGO %in% paste0(0,as.character(seq(4500,4599))), ~ "energia",
+    CODIGO %in% paste0(0,as.character(seq(7221,7224))), ~ "energia",
+    CODIGO %in% paste0(0,as.character(seq(7111,7213))), ~ "bienes",
+    CODIGO=="07224" ~ "bienes",
+    CODIGO %in% paste0(0,as.character(seq(7230,7369))), ~ "servicios",
+    cod_categoria %in% c(6,8,10,11) ~ servicios,
+    cod_categoria %in% c(5) ~ bienes,
+    CODIGO %in% paste0(0,as.character(seq(6111,6139))), ~ "bienes",
+    CODIGO %in% paste0(0,as.character(seq(8201,8203))), ~ "bienes",
+    CODIGO %in% paste0(0,as.character(seq(9111,9342))), ~ "bienes",
+    CODIGO %in% c("09150","09230") ~ "servicios"
+    CODIGO %in% paste0(0,as.character(seq(9350,9430))), ~ "servicios",
+    CODIGO %in% paste0(0,as.character(seq(9510,9549))), ~ "bienes",
+    CODIGO %in% paste0(0,as.character(seq(9601,9602))), ~ "servicios",
+  ))
+
+
+```
+
+income distribution by household
+```{r}
+hogares<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFhogar_2021.RDS"))
+hogares %>% 
+  select(IMPEXAC,FACTOR) -> ingresos
+
+
+# ingresos %>% ggplot(aes(IMPEXAC,weight=FACTOR)) + geom_histogram()
+
+
+perc_ingresos<-ingresos$IMPEXAC %>% 
+  quantile(weight=FACTOR, probs = seq(.1, .9, by = .1))
+
+
+hogares %>% 
+   mutate(perc_ing=findInterval(IMPEXAC,perc_ingresos)+1) %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    FACTOR=sum(FACTOR)
+  )
+
+
+hogares %>% 
+  select(NUMERO,IMPEXAC,FACTOR) %>% 
+  mutate(perc_ing=ntiles.wtd(hogares$IMPEXAC,n=10,weights=hogares$FACTOR)) -> hogares_perc
+
+
+```
+
+
+CPI per class of household
+```{r}
+
+
+gastos<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFgastos_2021.RDS"))
+
+
+
+gastos %>% 
+  mutate(GASTO=replace_na(GASTO,0)) %>% 
+  mutate(CANTIDAD=replace_na(CANTIDAD,0)) %>% 
+  left_join(select(hogares_perc,NUMERO,IMPEXAC,perc_ing),by="NUMERO") %>% 
+  group_by(CODIGO,perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    FACTOR=sum(FACTOR)
+  ) %>% 
+  ungroup() -> gasto_sum
+    
+gasto_sum %>% 
+  group_by(perc_ing) %>% 
+  summarise(GASTO_TOT=sum(GASTO)) -> gasto_total
+
+gasto_sum %>% 
+  left_join(gasto_total, by="perc_ing") %>% 
+  mutate(porc_gasto=GASTO/GASTO_TOT) %>% 
+  select(CODIGO,perc_ing,porc_gasto) %>% 
+  pivot_wider(names_from = perc_ing,values_from = porc_gasto) -> gasto_porc
+  
+write.csv(gasto_porc,paste0(project_path,'4_resultados/',"dist_gasto_decil.csv"))  
+
+```
+
