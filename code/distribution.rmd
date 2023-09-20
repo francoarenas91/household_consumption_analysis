@@ -1,0 +1,483 @@
+
+
+```{r}
+
+rm(list = ls())
+
+
+##carga paquetes
+
+PAQUETES <- c("dplyr","tidyverse","ggplot2","here","xlsx","XLConnect","openxlsx","dineq")
+
+
+for (el in PAQUETES){
+  if (!require(el, character.only = TRUE)) {
+    install.packages(el, repos = "https://cloud.r-project.org")
+    require(el, character.only = TRUE)
+  }
+}
+
+rm(PAQUETES, el)
+
+
+path<-dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(path)
+
+project_path<-substr(path,0,tail(unlist(str_locate_all(path,"/")),2))
+
+
+```
+
+
+
+cargo datos y filtro por los productos que me interesan
+```{r}
+
+
+gastos<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFgastos_2019.RDS"))
+hogares<-readRDS(paste0(project_path,'2_datos/EPF/',"MD_EPFhogar_2019.RDS"))
+
+
+gastos<-gastos %>%
+  complete(CODIGO,NUMERO) %>%  #completo todos los gastos que no salen en la muestra
+  filter(CODIGO %in%
+           c("04511", #electricidad
+             "04512", #electricidad
+             "04521", #gas natural
+             "04522", #gas natural
+             "04523", #gas licuado
+             "04524", #gas licuado
+             "04531", #combustibles liquidos hogar
+             "04532", #combustibles liquidos hogar
+             "07221", #gasoleo automoción
+             "07222", #gasolina automoción
+             "07311", #TREN DE CERCANÍAS (DISTANCIAS NO SUPERIORES A 50 KM)
+             "07313", #metro y tranvia
+             "07321", #autobus urbano
+             paste0(0,as.character(seq(1111,1225))) #alimentos
+             )
+         ) %>% 
+  mutate(ANOENC=2021) %>% 
+  mutate(GASTO=replace_na(GASTO,0)) %>% 
+  mutate(CANTIDAD=replace_na(CANTIDAD,0)) %>% 
+  select(-FACTOR)
+
+
+#cruzo tablas
+hogares %>% 
+  select(NUMERO,IMPEXAC,INTERIN,FACTOR) %>% 
+  right_join(gastos,by="NUMERO") -> datos
+
+
+```
+
+
+distribucion ingresos
+```{r}
+
+hogares %>% 
+  select(IMPEXAC,FACTOR) -> ingresos
+
+
+ingresos %>% ggplot(aes(IMPEXAC,weight=FACTOR)) + geom_histogram()
+
+
+perc_ingresos<-ingresos$IMPEXAC %>% 
+  quantile(weight=FACTOR, probs = seq(.1, .9, by = .1))
+
+
+```
+
+
+
+gasto por deciles de renta
+```{r}
+
+datos %>% 
+  mutate(perc_ing=findInterval(IMPEXAC,perc_ingresos)+1) %>% 
+  #imputo cantidades na por el promedio de cantidad/gasto
+  mutate(CANTIDAD=replace_na(GASTO*mean(CANTIDAD,na.rm=T)/mean(GASTO,na.rm=T)))-> datos_perc
+
+
+```
+
+
+
+para electricidad
+```{r}
+
+datos_perc %>% 
+  filter(CODIGO %in%
+           c("04511", #electricidad
+             "04512")) %>% 
+  mutate(GASTO=GASTO) %>%  #el incremento de precios 2019-2022
+  group_by(NUMERO,FACTOR,perc_ing,INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T)
+  ) %>% 
+  ungroup() -> electricidad
+
+electricidad %>% 
+  group_by(INTERIN) %>%  
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> electricidad_persona
+           
+
+electricidad_persona %>%
+  ggplot(aes(x=INTERIN,y=GASTO)) +
+  geom_col()+
+  theme_classic()+
+  xlab("ingresos mensuales del hogar") +
+  ylab("gasto promedio (euros/mes)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_discrete(labels=c("<500",
+                            "500-1.000",
+                            "1.000-1.500",
+                            "1.500-2.000",
+                            "2.000-2.500",
+                            "2.500-3.000",
+                            "3.000-5.000",
+                            "5.000-7.000",
+                            "7.000-9.000",
+                            ">9.000"))
+
+
+
+
+electricidad %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> electricidad_deciles
+           
+
+
+electricidad_deciles %>%
+  ggplot(aes(x=perc_ing,y=porc_gast)) +
+  geom_col()+
+  theme_classic()+
+  xlab("deciles de renta") +
+  ylab("% del gasto")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_continuous(breaks = seq(1,10))
+
+
+```
+
+
+gasolina
+```{r}
+
+datos_perc %>% 
+  filter(CODIGO %in%
+           c("04531", #combustibles liquidos hogar
+             "04532", #combustibles liquidos hogar
+             "07221", #gasoleo automoción
+             "07222")) %>% 
+  group_by(NUMERO,FACTOR,perc_ing,INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T)
+  ) %>% 
+  ungroup -> combustibles
+
+combustibles %>% 
+  group_by(INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> combustibles_por_persona
+
+combustibles_por_persona %>% 
+  ggplot(aes(x=INTERIN,y=GASTO)) +
+  geom_col()+
+  theme_classic()+
+  xlab("ingresos mensuales del hogar") +
+  ylab("gasto promedio (euros/mes)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_discrete(labels=c("<500",
+                                "500-1.000",
+                                "1.000-1.500",
+                                "1.500-2.000",
+                                "2.000-2.500",
+                                "2.500-3.000",
+                                "3.000-5.000",
+                                "5.000-7.000",
+                                "7.000-9.000",
+                                ">9.000")) +
+  scale_y_continuous(breaks=seq(0,120,by=10))
+  
+  
+  
+combustibles %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T),
+    subv=sum(subv,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> combustibles_deciles
+           
+
+combustibles_deciles %>% 
+  ggplot(aes(x=perc_ing,y=porc_gast)) +
+  geom_col()+
+  theme_classic()+
+  xlab("deciles de renta") +
+  ylab("% del total del gasto")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_continuous(breaks = seq(1,10))
+
+
+#cantidaddes decil inferior
+combustibles_deciles %>% 
+  mutate(cantidad_hogar=CANTIDAD/FACTOR) -> combustibles_deciles
+  
+
+
+
+```
+
+gas
+
+```{r}
+            
+
+datos_perc %>% 
+  filter(CODIGO %in%
+           c("04521", #gas natural
+             "04522", #gas natural
+             "04523", #gas licuado
+             "04524" )) %>% 
+  group_by(NUMERO,FACTOR,perc_ing, INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    subv=sum(subv,na.rm=T)
+  ) %>% 
+  ungroup() ->gas
+
+gas %>% 
+  group_by(INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> gas_persona
+           
+
+gas_persona %>% 
+  ggplot(aes(x=INTERIN,y=GASTO)) +
+  geom_col()+
+  theme_classic()+
+  xlab("ingresos mensuales del hogar") +
+  ylab("gasto promedio (euros/mes)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_discrete(labels=c("<500",
+                                "500-1.000",
+                                "1.000-1.500",
+                                "1.500-2.000",
+                                "2.000-2.500",
+                                "2.500-3.000",
+                                "3.000-5.000",
+                                "5.000-7.000",
+                                "7.000-9.000",
+                                ">9.000")) +
+  scale_y_continuous(breaks=seq(0,120,by=10))
+
+
+gas %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> gas_deciles
+           
+
+gas_deciles %>% 
+  ggplot(aes(x=perc_ing,y=porc_gast)) +
+  geom_col()+
+  theme_classic()+
+  xlab("deciles de renta") +
+  ylab("% del total del gasto")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_continuous(breaks = seq(1,10))
+
+gas_deciles %>% 
+  mutate(coantidad_hogar=CANTIDAD/FACTOR)
+
+
+```
+
+
+
+Transporte público
+
+```{r}
+datos_perc %>% 
+  filter(CODIGO %in%
+           c("07311", #TREN DE CERCANÍAS (DISTANCIAS NO SUPERIORES A 50 KM)
+             "07313", #metro y tranvia
+             "07321" #autobus urbano
+             )
+         ) %>% 
+  mutate(subv=case_when(
+              CODIGO=="07311" ~ GASTO,
+              TRUE ~ GASTO*0.5
+              )
+  )  %>% 
+  group_by(NUMERO,FACTOR,perc_ing, INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T)
+  ) %>% 
+  ungroup() ->tte
+
+tte %>% 
+  group_by(INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) %>% 
+  mutate(porc_gast=(GASTO/sum(GASTO))*100)-> tte_persona
+           
+
+tte_persona %>% 
+  ggplot(aes(x=INTERIN,y=GASTO)) +
+  geom_col()+
+  theme_classic()+
+  xlab("ingresos mensuales del hogar") +
+  ylab("gasto promedio (euros/mes)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_discrete(labels=c("<500",
+                                "500-1.000",
+                                "1.000-1.500",
+                                "1.500-2.000",
+                                "2.000-2.500",
+                                "2.500-3.000",
+                                "3.000-5.000",
+                                "5.000-7.000",
+                                "7.000-9.000",
+                                ">9.000")) 
+#+
+#  scale_y_continuous(breaks=seq(0,120,by=10))
+
+
+tte %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) -> tte_deciles
+           
+
+tte_deciles %>% 
+  ggplot(aes(x=perc_ing,y=GASTO)) +
+  geom_col()+
+  theme_classic()+
+  xlab("deciles de renta") +
+  ylab("% del total del gasto")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_x_continuous(breaks = seq(1,10))
+
+```
+
+
+
+
+alimentos selectos
+```{r}
+
+datos_perc %>% 
+  filter(CODIGO %in%
+           c("01113", # pan
+             "01112",  #harinas
+             "01111", # arroz
+             "01141",
+             "01142",
+             "01145",
+             "01147", #huevos
+             "01153", #aceite de oliva
+             paste0(0,as.character(seq(1161,1168))), #frutas
+             paste0(0,as.character(seq(1170,1176))), #hortalizas
+             "0117A", #patatas
+             "01179", #aceitunas
+             "01153", #aceite de oliva
+             "01116"  #pasta
+             ))  %>% 
+  mutate(GASTO=case_when(
+    CODIGO=="01111" ~ GASTO*1.16,
+    CODIGO=="01112" ~ GASTO*1.378,
+    CODIGO=="01113" ~ GASTO*1.149,
+    CODIGO=="01141" ~ GASTO*1.256,
+    CODIGO=="01142" ~ GASTO*1.25,
+    CODIGO=="01145" ~ GASTO*1.187,
+    CODIGO=="01147" ~ GASTO*1.255,
+    
+    CODIGO %in%  paste0(0,as.character(seq(1161,1168))) ~ GASTO*1.127,
+    CODIGO %in%  paste0(0,as.character(seq(1170,1176))) ~ GASTO*1.257,
+    CODIGO=="0117A" ~ GASTO*1.19,
+    CODIGO=="01179" ~ GASTO*1.19,
+    CODIGO=="01153" ~ GASTO*1.157,
+    CODIGO=="01116" ~ GASTO*1.157,
+    T ~GASTO
+  )) %>% 
+  mutate(subv=case_when(
+    CODIGO=="01111" ~ GASTO*0.04,
+    CODIGO=="01112" ~ GASTO*0.04,
+    CODIGO=="01113" ~ GASTO*0.04,
+    CODIGO=="01141" ~ GASTO*0.04,
+    CODIGO=="01142" ~ GASTO*0.04,
+    CODIGO=="01145" ~ GASTO*0.04,
+    CODIGO=="01147" ~ GASTO*0.04,
+    CODIGO %in%  paste0(0,as.character(seq(1161,1168))) ~ GASTO*0.04,
+    CODIGO %in%  paste0(0,as.character(seq(1170,1176))) ~ GASTO*0.04,
+    CODIGO=="0117A" ~ GASTO*0.04,
+    CODIGO=="01179" ~ GASTO*0.04,
+    CODIGO=="01153" ~ GASTO*0.06,
+    CODIGO=="01116" ~ GASTO*0.06,
+    T ~0)
+    ) %>% 
+  group_by(NUMERO,FACTOR,perc_ing,INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T)
+  ) %>% 
+  ungroup -> alimentos
+
+alimentos %>% 
+  group_by(INTERIN) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T),
+  )-> alimentos_por_persona
+
+alimentos %>% 
+  group_by(perc_ing) %>% 
+  summarise(
+    GASTO=sum(GASTO),
+    CANTIDAD=sum(CANTIDAD,na.rm=T),
+    FACTOR=sum(FACTOR,na.rm=T)
+  ) -> alimentos_deciles
+           
+
+
+```
+
